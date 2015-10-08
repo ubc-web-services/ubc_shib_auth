@@ -1,0 +1,7 @@
+name = UBC Shibboleth Authentication
+description = Custom handing of Shibboleth Authentication for UBC
+core = 7.x
+version = 7.x-1.1
+package = UBC IT Web Services
+dependencies[] = shib_auth
+configure = admin/config/people/shib_auth/ubc

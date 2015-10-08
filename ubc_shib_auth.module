@@ -1,0 +1,143 @@
+<?php
+/**
+ * @file
+ *
+ * Shib Auth module to display an intermediate login page to end users.
+ * Redirects to specified content type after login.
+ *
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function ubc_shib_auth_menu() {
+
+  $items['login_required'] = array(
+    'title' => 'Login Required',
+    'page callback' => 'ubc_shib_auth_login_page',
+    'access callback' => TRUE,
+  );
+
+  // hook into the existing Shib Auth settings
+  $items['admin/config/people/shib_auth/ubc'] = array(
+    'title' => 'UBC settings',
+    'description' => 'Settings for UBC integration with Shibboleth',
+    'type' => MENU_LOCAL_TASK,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ubc_shib_auth_admin_settings_form'),
+    'access arguments' => array('administer shibboleth authentication'),
+  );
+
+  return $items;
+
+}
+
+/**
+ * Implements hook_admin_settings_form().
+ */
+function ubc_shib_auth_admin_settings_form($form, &$form_state) {
+
+  $form['ubc_shib_login_text'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Login Required Message'),
+    '#default_value' => variable_get('ubc_shib_login_text', t('To access this content please login with your CWL account.')),
+  );
+
+  $form['ubc_shib_protected_nodes'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Protected Content Type'),
+    '#description' => t('The content type\'s machine name to be protected by CWL login.'),
+    '#default_value' => variable_get('ubc_shib_protected_nodes', 'example'),
+  );
+
+  $form['ubc_shib_view_modes'] = array(
+    '#type' => 'textfield',
+    '#title' => t('View Modes'),
+    '#description' => t('A comma seperated list of view modes to protect. For panels you may need to use <em>page_manager</em>'),
+    '#default_value' => variable_get('ubc_shib_view_modes', 'full'),
+  );
+
+  $form['ubc_shib_allowed_roles'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Allowed Roles'),
+    '#description' => t('A comma seperated list of roles names who can access this content.'),
+    '#default_value' => variable_get('ubc_shib_allowed_roles', 'staff, content editor, super user, administrator'),
+  );
+
+  return system_settings_form($form);
+}
+
+/*
+ * Callback for Login Required page
+ */
+function ubc_shib_auth_login_page() {
+
+  global $user;
+  global $base_url;
+
+  $dest = $output = '';
+
+  // if user is already logged in when directed here they don't have the correct role
+  if (user_is_logged_in()) {
+    drupal_set_message(t('CWL account <strong>@name</strong> is not allowed access to this page.
+      Please <a href="@url">logout</a> and try again with a valid CWL Account or request that your account is given the approriate permissions.',
+      array(
+        '@name' => $user->name,
+        '@url' => 'user/logout'
+      )), 'warning');
+  }
+
+  if (isset($_GET['destination'])) {
+    $dest = check_plain($_GET['destination']);
+  }
+
+  $target = $base_url . '/' . $dest;
+
+  $shib_url = variable_get('shib_auth_full_handler_url', $base_url . '/Shibboleth.sso/Login');
+
+  $options = array(
+    'attributes' => array(
+      'class' => 'btn btn-primary btn-lg'
+    ),
+    'query' => array(
+      'target' => $target,
+    ),
+    'absolute' => TRUE,
+  );
+
+  // get the login required message from the admin settings
+  $output .= '<div class="login-text"><p>' . variable_get('ubc_shib_login_text',
+      t('To access this content please login with your CWL account.')) . '</p></div>';
+
+  // output the shib url for login
+  $link = l('Login', $shib_url, $options);
+  $output .= '<div class="login-wrapper">' . $link . '</div>';
+
+  return $output;
+
+}
+
+/**
+ * Implements hook_entity_view().
+ */
+function ubc_shib_auth_entity_view($entity, $type, $view_mode, $langcode) {
+
+  // TODO allow multiple choice of entities
+  $nodetype = variable_get('ubc_shib_protected_nodes', 'example');
+  $shib_view_modes = array_map('trim', explode(',', variable_get('ubc_shib_view_modes', 'full')));
+
+  if (isset($entity->type) && $entity->type == $nodetype && (array_key_exists($view_mode, array_flip($shib_view_modes)))) {
+
+    global $user;
+
+    // compare roles
+    $allowedroles = array_map('trim', explode(',', variable_get('ubc_shib_allowed_roles')));
+    $allowed = array_intersect($allowedroles, array_values($user->roles));
+
+    // redirect to a login page if user does not have the correct role
+    if (!$allowed) {
+      $options = array('query' => drupal_get_destination());
+      drupal_goto('login_required', $options);
+    }
+  }
+}
