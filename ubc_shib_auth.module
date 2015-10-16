@@ -40,12 +40,16 @@ function ubc_shib_auth_admin_settings_form($form, &$form_state) {
   $form['ubc_shib_login_text'] = array(
     '#type' => 'textarea',
     '#title' => t('Login Required Message'),
-    '#default_value' => variable_get('ubc_shib_login_text', t('To access this content please login with your CWL account.')),
+    '#required' => TRUE,
+    '#default_value' => variable_get('ubc_shib_login_text',
+      t('To access this content please login with your <a href="@url">Campus Wide Login (CWL)</a> account.',
+        array('@url' => '//it.ubc.ca/services/accounts-passwords/campus-wide-login-cwl'))),
   );
 
   $form['ubc_shib_protected_nodes'] = array(
     '#type' => 'textfield',
     '#title' => t('Protected Content Type'),
+    '#required' => TRUE,
     '#description' => t('The content type\'s machine name to be protected by CWL login.'),
     '#default_value' => variable_get('ubc_shib_protected_nodes', 'example'),
   );
@@ -53,14 +57,23 @@ function ubc_shib_auth_admin_settings_form($form, &$form_state) {
   $form['ubc_shib_view_modes'] = array(
     '#type' => 'textfield',
     '#title' => t('View Modes'),
+    '#required' => TRUE,
     '#description' => t('A comma seperated list of view modes to protect. For panels you may need to use <em>page_manager</em>'),
     '#default_value' => variable_get('ubc_shib_view_modes', 'full'),
+  );
+
+  $form['ubc_shib_nids'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Node IDs (optional)'),
+    '#description' => t('If you only want to protect certain Node IDs enter them here (comma separated).'),
+    '#default_value' => variable_get('ubc_shib_nids', ''),
   );
 
   $form['ubc_shib_allowed_roles'] = array(
     '#type' => 'textfield',
     '#title' => t('Allowed Roles'),
-    '#description' => t('A comma seperated list of roles names who can access this content.'),
+    '#required' => TRUE,
+    '#description' => t('A comma seperated list of roles names who can access this content. You can use <em>authenticated user</em> for all Shibboleth users.'),
     '#default_value' => variable_get('ubc_shib_allowed_roles', 'staff, content editor, super user, administrator'),
   );
 
@@ -80,7 +93,7 @@ function ubc_shib_auth_login_page() {
   // if user is already logged in when directed here they don't have the correct role
   if (user_is_logged_in()) {
     drupal_set_message(t('CWL account <strong>@name</strong> is not allowed access to this page.
-      Please <a href="@url">logout</a> and try again with a valid CWL Account or request that your account is given the approriate permissions.',
+      Please <a href="@url">logout</a> and try again with a valid CWL Account or request that your account is given the appropriate permissions.',
       array(
         '@name' => $user->name,
         '@url' => 'user/logout'
@@ -106,8 +119,7 @@ function ubc_shib_auth_login_page() {
   );
 
   // get the login required message from the admin settings
-  $output .= '<div class="login-text"><p>' . variable_get('ubc_shib_login_text',
-      t('To access this content please login with your CWL account.')) . '</p></div>';
+  $output .= '<div class="login-text"><p>' . variable_get('ubc_shib_login_text', '') . '</p></div>';
 
   // output the shib url for login
   $link = l('Login', $shib_url, $options);
@@ -130,14 +142,69 @@ function ubc_shib_auth_entity_view($entity, $type, $view_mode, $langcode) {
 
     global $user;
 
-    // compare roles
-    $allowedroles = array_map('trim', explode(',', variable_get('ubc_shib_allowed_roles')));
-    $allowed = array_intersect($allowedroles, array_values($user->roles));
+    _ubc_shib_auth_compare_roles($user);
+    _ubc_shib_auth_check_protected($entity->nid);
+  }
+}
 
-    // redirect to a login page if user does not have the correct role
-    if (!$allowed) {
-      $options = array('query' => drupal_get_destination());
-      drupal_goto('login_required', $options);
+/**
+ * Implements ctools_render_alter().
+ *
+ * This is done since hook_node_view never gets called if the node is rendered by Ctools.
+ *
+ */
+function ubc_shib_auth_ctools_render_alter(&$info, &$page, &$context) {
+
+  if ($context['handler']->name == 'node_view_panelizer') {
+
+    $data = array_values($context['contexts']);
+
+    if (!empty($data[0]->data->type)) {
+
+      $node_type = $data[0]->data->type;
+      $shib_node_type = variable_get('ubc_shib_protected_nodes', 'example');
+
+      if ($node_type == $shib_node_type && $data[0]->nid == '') {
+
+        global $user;
+
+        _ubc_shib_auth_compare_roles($user);
+        _ubc_shib_auth_check_protected($data[0]->nid);
+
+      }
+    }
+  }
+}
+
+/**
+ * Helper to compare user roles to those in settings form
+ *
+ */
+function _ubc_shib_auth_compare_roles($user) {
+  // compare roles
+  $allowedroles = array_map('trim', explode(',', variable_get('ubc_shib_allowed_roles')));
+  $allowed = array_intersect($allowedroles, array_values($user->roles));
+
+  // redirect to a login page if user does not have the correct role
+  if (!$allowed) {
+    $options = array('query' => drupal_get_destination());
+    drupal_goto('login_required', $options);
+  }
+}
+
+/**
+ * Helper to compare current nid to those protected in the settings form
+ *
+ */
+function _ubc_shib_auth_check_protected($nid) {
+
+  $protectednids = array_map('trim', explode(',', variable_get('ubc_shib_nids', '')));
+
+  // if there are specific Node IDs that need to be protected we can exit if the current nid is not in the settings form
+  if (!empty($protectednids)) {
+    $protected = in_array($nid, array_values($protectednids));
+    if (!$protected) {
+      return;
     }
   }
 }
